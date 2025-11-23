@@ -1,0 +1,482 @@
+---
+title: "EDA"
+author: "Lidia Velicia Ruiz"
+date: "2025-11-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+<!-- To execute the chunk you can do this by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*.  -->
+
+<!-- Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*. -->
+
+<!-- When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file). -->
+
+<!-- The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed. -->
+
+<!-- When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document.-->
+
+<!-- You can also embed plots {r pressure, echo=FALSE} Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot. -->
+
+<!--  -->
+<!--  -->
+
+
+## Introducción
+
+Este código implementa correctamente la secuencia recomendada:
+
+  1. División de datos (train/val/test)
+  2. Preprocesamiento solo en train
+  3. Aplicación de transformaciones aprendidas a val/test
+  4. Entrenamiento y evaluación
+
+
+<b>
+NOTAS IMPORTANTES:
+
+  * NUNCA usar estadísticas de val/test para modificaciones en el preprocesamiento
+  * PCA se ajusta solo en train, luego se proyectan en ese espacio vectorial los datos de val/test
+  * El conjunto de test NO debe tocarse hasta la evaluación final
+  * Si RMSE(val) << RMSE(test) → posible overfitting
+  * Usar validación para ajustar hiperparámetros (ej: número de componentes)
+  
+</b>
+
+
+
+## 0. Setup
+
+### 0.1 Librerías
+
+Descargamos e importamos las librerías necesarias
+```{r}
+# install.packages("readxl")
+# install.packages("caret")
+# install.packages("stats")
+# install.packages("ggplot2")
+
+library(readxl)   # para leer archivos Excel
+library(stats)    # para PCA y regresión lineal
+library(caret)    # para crear particiones estratificadas
+
+library(tidyverse)  # para manipulación y visualización de datos
+library(dplyr)      # para manipulación de datos
+library(ggplot2)    # para visualización de datos
+library(reshape2)   # para la matriz de correlación
+
+```
+
+
+### 0.2 Carga de datos
+```{r}
+
+# Directorio de trabajo
+setwd("C:/Users/velir/OneDrive - Universidad Alfonso X el Sabio/1. UAX UNIVERSIDAD/2. MASTER Inteligencia Artificial/01_Cuatri_MUIA/MUIA_1c Matematicas y Estadistica para la IA/ENTREGA_01")
+
+# Cargamos el dataset
+df <- read.csv("data/dataset.csv")
+
+cat("Dimensiones del dataset:\n", nrow(df), "filas\n", ncol(df), "columnas\n\n")
+
+```
+
+
+
+
+## 1. EDA (Análisis exploratorio) {#Secc-01-EDA}
+
+```{r}
+# copia del dataset original
+df1 <- df
+
+# eliminar columna Id ya que no es una variable que aporte información
+df1 <- df1 %>%
+  select(-Id)  
+
+```
+
+### 1.1 Tipos de variables
+
+Veamos la estructura general del dataset
+```{r}
+# ver estructura general del datase (variables, tipos de datos, primeros registros)
+glimpse(df1)
+```
+
+```{r}
+# ver cuántos tipos de variables hay
+type_tab <- as.data.frame(table(vapply(df1, typeof, character(1))))
+colnames(type_tab) <- c("tipo_dato", "num_var_predict")
+type_tab[order(-type_tab$num_var_predict), ]
+```
+
+Para posteriormente poder hacer una reducción de dimensionalidad (PCA) habrá que gestionar estas variables categóricas, veremos cómo en el apartado [Preprocesamiento](#Secc-02-Preproc)
+
+
+### 1.2 Resumen estadístico
+```{r}
+summary(df)
+  # variables numéricas <int> : media, mediana, min, max, cuartiles
+  # variables categóricas <chr>: frecuencia de cada categoría
+```
+
+
+#### Visualizaciones distribuciones variables
+
+Visualicemos primero la distribución de las variables numéricas
+```{r fig.width=12, fig.height=10, dpi=300, out.width='100%'}
+
+# primero vamos a separar las variables numéricas y categóricas
+vars_num <- df1 %>%
+  select(where(is.numeric))  # seleccionar solo variables numéricas
+
+vars_cat <- df1 %>%
+  select(where(is.character))  # seleccionar solo variables categóricas
+vars_num <- df1 %>%
+  select(where(is.numeric))  # seleccionar solo variables numéricas
+
+vars_cat <- df1 %>%
+  select(where(is.character))  # seleccionar solo variables categóricas
+
+# sacar la distribución de cada variable numérica en formato largo (long format) para ggplot
+vars_num_gg <- vars_num %>%
+  pivot_longer(
+    cols = everything(),        # todas las columnas
+    names_to = "variable",      # nueva columna con el nombre original de la variable
+    values_to = "valor"         # nueva columna con el valor numérico
+  )
+
+# DIAGRAMA BARRAS POR VARIABLE
+ggplot(vars_num_gg, aes(x = as.factor(valor), fill = variable)) +
+  geom_bar() +
+  facet_wrap(~ variable, scales = "free") +
+  theme_minimal() +
+  labs(title = "Frecuencia de cada valor", x = "Valor", y = "Frecuencia") +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 270, vjust = 0.5, hjust = 1, size = 6),
+    )
+```
+
+
+Boxplot para ver la dispersión de los valores de las variables
+```{r fig.width=12, fig.height=10, dpi=300, out.width='100%'}
+
+# BOXPLOT con jitter (al lado) para ver mejor la distribución
+ggplot(vars_num_gg, aes(y = valor, fill = variable)) +
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) +
+  geom_jitter(aes(x = factor(1)), width = 0.2, alpha = 0.6, size = 0.7, show.legend = FALSE) +
+  facet_wrap(~ variable, scales = "free") + 
+  labs(title = "Boxplots individuales por variable (con jitter)", y = "Valor", x = "") +
+  theme(
+    legend.position = "none",
+  )
+
+```
+
+
+Visualicemos ahora las variables categóricas
+```{r fig.width=12, fig.height=10, dpi=300, out.width='100%'}
+# sacar las frecuencias de cada categoría por variable
+vars_cat_gg <- vars_cat %>%
+  pivot_longer(
+    cols = everything(),        # todas las columnas
+    names_to = "variable",      # nueva columna con el nombre original de la variable
+    values_to = "valor"         # nueva columna con el valor numérico
+  )
+
+# DIAGRAMA BARRAS POR VARIABLE CATEGÓRICA
+#-----------------------------------------
+ggplot(vars_cat_gg, aes(x = valor, fill = variable)) +
+  geom_bar() +
+  facet_wrap(~ variable, scales = "free") +
+  theme_minimal() +
+  labs(title = "Frecuencia de cada categoría", x = "Categoría", y = "Frecuencia") +
+  theme( legend.position = "none",
+         axis.text.x = element_text(angle = 270, vjust = 0.5, hjust = 1, size = 6),
+         strip.text = element_text(size = 10)
+         )
+```
+
+
+
+
+## 2. Preprocesamiento {#Secc-02-Preproc}
+
+```{r}
+df2 <- df1  # (en df1 se eliminó la variable Id)
+```
+
+
+### 2.0 División de los datos en train-validation-test
+
+Con el fin de evitar filtraciones de información durante el preprocesamiento de los datos
+
+```{r}
+# Primero hay que separar variable objetivo y predictoras
+# variable objetivo
+y <- df2$SalePrice
+
+# variables predictoras
+X <- df2 %>%
+  select(-SalePrice)  # eliminar columna objetivo
+
+# Establecemos la semilla para reproducibilidad
+set.seed(42)
+
+# Separamos 60% para entrenamiento
+trainIndex <- createDataPartition(y, p = 0.6, list = FALSE)
+                # createDataPartition mantiene la distribución de la variable objetivo
+X_train <- X[trainIndex, ]
+y_train <- y[trainIndex]
+
+# Del 40% restante, dividimos en 50%-50% (validación y test)
+remainingIndex <- setdiff(seq_len(nrow(df2)), trainIndex)
+valIndex <- createDataPartition(y[remainingIndex], p = 0.5, list = FALSE)
+
+X_val <- X[remainingIndex[valIndex], ]
+y_val <- y[remainingIndex[valIndex]]
+
+X_test <- X[remainingIndex[-valIndex], ]
+y_test <- y[remainingIndex[-valIndex]]
+
+cat("Tamaños de conjuntos:\n")
+cat("  - Entrenamiento:", nrow(X_train), "observaciones\n")
+cat("  - Validación:", nrow(X_val), "observaciones\n")
+cat("  - Test:", nrow(X_test), "observaciones\n\n")
+```
+
+hacemos una copia de trabajo para los subsets
+```{r}
+# naming convention: añadir _n correspondiente a la sección del proceso en la que se encuentra (sección 2 Preprocesamiento --> _2)
+X_train_2 <- X_train
+X_val_2 <- X_val
+X_test_2 <- X_test
+```
+
+
+
+### 2.1 Gestión de nulos
+
+#### Valores duplicados
+```{r}
+cat( "Número de entradas duplicadas:", sum(duplicated(X_train_2)) )
+```
+
+#### NULL o vacío
+```{r}
+
+cat( "Número de NULL:", sum(sapply(X_train_2, is.null)) )
+
+cat("\nNúmero de vacíos:",sum(sapply(X_train_2, function(x) sum(x == "" | x == " " , na.rm = TRUE)))  )
+```
+
+
+#### NAs
+
+Veamos qué variables tienen NAs
+```{r}
+
+# crear dataframe de nulos por variable
+nulos_X_train <- as.data.frame(colSums(is.na(X_train_2)))
+colnames(nulos_X_train) <- c("num_nulos")
+
+nulos_X_train <- nulos_X_train %>%
+  # seleccionar las variables que tienen nulos
+  filter(num_nulos > 0) %>%
+  # convertir los nombres de las filas en una columna
+  tibble::rownames_to_column(var = "variable") %>%
+  mutate(
+    # añadir columna del porcentaje de nulos
+    porcentaje_nulos = round((num_nulos / nrow(X_train_2)) * 100, 2),
+    # añadir columna del tipo de variable
+    tipo_variable = sapply(variable, function(v) class(X_train_2[[v]]))
+  ) %>%
+  # ordenar de mayor a menor número de nulos
+  arrange(desc(tipo_variable), desc(porcentaje_nulos))
+
+print(nulos_X_train)
+```
+
+Casuística de `NA`s:
+
+  * Las variables numéricas son tratables mediante técnicas de imputación de datos, pero:
+      - `GarageYrBlt` hay 81 nulos que coinciden con los que no tienen garaje
+      - `MasVnrArea` hay 8 nulos que coinciden con los que no tienen revestimiento
+      - `LotFrontage` 
+  
+  * Sin embargo, (casi todas) las variables categóricas contemplan el `NA` como categoría (ej: `PoolQC=NA` cuando no hay piscina), por lo que su tratamiento se solucionaría si sustituimos estos valores vacíos por la categoría ``No`` (no aplica)
+  
+  * Las únicas variables que no contemplan `NA` como categoría son ``MasVnrType`` y ``Electrical``, esas habrá que tratarlas con imputación también.
+
+
+
+##### NAs variables categóricas "no"
+
+Estas son las variables que queremos recategorizar bien
+```{r}
+
+vars_cat_na_no <- c("Alley", "FireplaceQu", "PoolQC", "Fence", "MiscFeature",
+                    "BsmtQual", "BsmtCond", "BsmtExposure", "BsmtFinType1", "BsmtFinType2",
+                    "GarageType", "GarageFinish", "GarageQual", "GarageCond")
+
+sapply(X_train_2[ , vars_cat_na_no], function(x) sum(is.na(x)))
+```
+
+```{r}
+
+# para estas variables sustituimos los NA por "No"
+X_train_2 <- X_train_2 %>%
+  mutate(across(all_of(vars_cat_na_no), ~replace_na(.x, "No")))
+
+# comprobamos que ya no hay NAs en esas variables
+sapply(X_train_2[ , vars_cat_na_no], function(x) sum(is.na(x)))
+
+```
+
+
+
+##### NAs variables numéricas
+
+Primero estudiemos las variables
+```{r}
+vars_num_na <- c("LotFrontage", "MasVnrArea", "GarageYrBlt")
+summary(X_train_2[ , vars_num_na])
+```
+
+
+
+
+##### NAs variables categóricas imputables
+
+En `LotFrontage`: imputar la mediana
+```{r}
+# primero creamos la variable indicadora de NA
+X_train_2$LotFrontage_na <- is.na(X_train_2$LotFrontage)
+
+# luego calculamos la mediana
+med <- median(X_train_2$LotFrontage, na.rm = TRUE)
+
+# finalmente imputamos los NAs con la mediana
+X_train_2$LotFrontage[is.na(X_train_2$LotFrontage)] <- med
+
+
+# comprobamos que ya no hay NAs en LotFrontage
+sum(is.na(X_train_2$LotFrontage))
+
+# y eliminamos la variable indicadora por limpieza
+X_train_2 <- X_train_2 %>%
+  select(-LotFrontage_na)
+```
+
+En `MasVnrArea`: si no hay revestimiento, el área es 0
+```{r}
+X_train_2$MasVnrArea[is.na(X_train_2$MasVnrArea)] <- 0
+
+# comprobamos que ya no hay NAs en MasVnrArea
+sum(is.na(X_train_2$MasVnrArea))
+```
+
+
+En `GarageYrBlt`: se podria imputar el año de construcción de la vivienda  
+*(esta variable posteriormente desaparecerá porque está muy fuertemente correlacionada con `YearBuilt`, po rlo que este problema desaparece)*
+
+
+
+
+### 2.2 Procesamiento de variables categóricas
+
+
+```{r}
+
+```
+
+
+
+
+### 2.3 Feature engineering
+
+
+```{r}
+
+```
+
+
+
+
+
+### 2.4 Data integration
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Matriz correlación
+
+```{r fig.width=12, fig.height=10, dpi=300, out.width='100%'}
+
+
+vars_num_corr <- vars_num %>%
+  select(-SalePrice)  # eliminar variable objetivo para este análisis
+
+corr_matrix <- cor(vars_num_corr, use = "pairwise.complete.obs")
+
+# print(round(corr_matrix, 2))
+
+melted_corr <- melt(corr_matrix)
+
+ggplot(data = melted_corr, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                       limit = c(-1, 1), name = "Correlación") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle=270, vjust=1, hjust=1)
+    ) +
+  coord_fixed() +
+  labs(title = "Matriz de Correlación de Variables Numéricas")
+```
+
+
+```{r}
+
+# ahora mostrar solo los pares con alta correlación (>0.7 o <-0.7)
+high_corr <- which(abs(corr_matrix) > 0.7 & abs(corr_matrix) < 1, arr.ind = TRUE)
+high_corr_pairs <- data.frame(
+  Var1 = rownames(corr_matrix)[high_corr[, 1]],
+  Var2 = colnames(corr_matrix)[high_corr[, 2]],
+  Correlation = corr_matrix[high_corr]
+)
+
+high_corr_pairs <- high_corr_pairs %>%
+  # eliminar duplicados (Var1, Var2) y (Var2, Var1)
+  filter(Var1 < Var2) %>%
+  # añadir columna con el tipo de var1 y otra con el tipo de var2
+  mutate(
+    Tipo_Var1 = sapply(Var1, function(v) class(X_train_2[[v]])),
+    Tipo_Var2 = sapply(Var2, function(v) class(X_train_2[[v]]))
+  ) %>%
+  arrange(-abs(Correlation))
+
+high_corr_pairs
+```
+
+
+
+#### 2.1.2 var. categóricas
+las que tienen más de un 80% de nulos las vamos a eliminar, porque no tiene sentido que m ás de la mitad de los datos sean sintéticos
+
+## 3. PCA {#Secc-03-PCA}

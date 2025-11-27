@@ -1,0 +1,63 @@
+MACHINE LEARNING PIPELINES
+
+objects
+floats, integers
+
+----------------------------------------------------------------------------------------
+CREATE FEATURES AND TARGET VARIABLES
+----------------------------------------------------------------------------------------
+
+----------------------------------------------------------------------------------------
+SPLIT COLUMNS TO CATEGORICAL AND NUMERICAL (list of columna names)
+----------------------------------------------------------------------------------------
+	- num_cols (int or float)
+	- cat_cols (object or string)
+
+----------------------------------------------------------------------------------------
+START PIPELINES
+----------------------------------------------------------------------------------------
+
+numerical_pipeline[
+	1st task) IMPUTER: fill in missing values with the average/median 
+	2nd task) SCALER: StandardScaler [0,1]
+]
+
+
+categorical_pipeline[
+	1st task) IMPUTER: moda
+	2nd task) ENCODER: OneHotEncoder (converts all string into binary)
+				handle_unknown='ignore' to handle all the unseen categories without errors (while testing)
+]
+
+----------------------------------------------------------------------------------------
+JOIN THE PIPELINES TOGETHER
+----------------------------------------------------------------------------------------
+
+preprocessor[ColumnTransformer
+	1) numerical_pipeline applied to all num_cols
+	2) categorical_pipeline applied to all cat_cols
+
+]
+
+----------------------------------------------------------------------------------------
+SPLIT DATASET INTO TRAIN-TEST
+----------------------------------------------------------------------------------------
+train_test_split()
+
+
+----------------------------------------------------------------------------------------
+TRAIN MODEL
+----------------------------------------------------------------------------------------
+
+pipeline[
+	1) PREPROCESS, preprocessor
+	2) MODEL, RandomForestRegressor()
+]
+pipeline.fit(X_train, y_train)
+
+
+----------------------------------------------------------------------------------------
+PREDICTION
+----------------------------------------------------------------------------------------
+
+y_pred = pipeline.predict(X_test)

@@ -1,4 +1,16 @@
-
+# INFO
+# FLUJO DE TRABAJO CORRECTO PARA MODELADO PREDICTIVO EVITANDO DATA LEAKAGE
+# 1. Cargar los datos completos
+# 2. Análisis Exploratorio (EDA), con todo el dataset 
+      # • Entender tipos de variables y su significado 
+      # • Visualizar distribuciones, correlaciones, outliers 
+      # • Identificar valores faltantes y su patrón 
+# 3. Dividir en train/validation/test (60-20-20) 
+# 4. Preprocesamiento: parámetros calculados solo con train 
+# 5. Aplicar transformaciones a train, validation y test usando parámetros de train 
+# 6. Ajustar modelos con train 
+# 7. Seleccionar hiperparámetros evaluando en validation 
+# 8. Evaluación final: una única vez en test 
 
 #################################################################################
 #################################################################################
@@ -18,11 +30,12 @@
 
 library(readxl)   # para leer archivos Excel
 library(stats)    # para PCA y regresión lineal
-library(caret)    # para crear particiones estratificadas
 
 library(tidyverse)  # para manipulación y visualización de datos
 library(dplyr)      # para manipulación de datos
 library(ggplot2)    # para visualización de datos
+
+library(tidymodels)  # para pipelines y workflows de preprocesamiento y modelados
 
 
 # ------------------------------------------------------------------------------
@@ -30,26 +43,12 @@ library(ggplot2)    # para visualización de datos
 # ------------------------------------------------------------------------------
 
 # Directorio de trabajo
-setwd("C:/Users/velir/OneDrive - Universidad Alfonso X el Sabio/1. UAX UNIVERSIDAD/2. MASTER Inteligencia Artificial/01_Cuatri_MUIA/MUIA_1c Matematicas y Estadistica para la IA/ENTREGA_01")
+setwd("C:/Users/velir/^LOCAL_GITHUB/2025_UAX_MUIA/1c_Estadistica/MUIA_MyEpIA-ENTREGA_1-Regresion_Inmobiliaria/")
 
 # Cargamos el dataset
-df <- read.csv("dataset.csv")
+df <- read.csv("data/dataset.csv")
 
 cat("Dimensiones del dataset:\n", nrow(df), "filas\n", ncol(df), "columnas\n\n")
-
-
-# ------------------------------------------------------------------------------
-# 0.3 VARIABLE OBJETIVO Y PREDICTORAS
-# ------------------------------------------------------------------------------
-
-# variable objetivo es SalePrice
-y <- df$SalePrice
-
-# el resto son variables predictoras (salvo Id y SalePrice)
-X <- df %>%
-  select(-Id, -SalePrice)  # eliminar columnas no predictoras
-
-cat("Dimensiones del dataset:\n", nrow(df), "filas\n", "1 variable objetivo\n", ncol(X), "variables predictoras\n\n")
 
 
 
@@ -66,9 +65,9 @@ df1 <- df
 df1 <- df1 %>%
   select(-Id)  
 
-# ------------------------------------------------------------------------------
+#################################################################################
 # 1.1 TIPOS VARIABLES
-# ------------------------------------------------------------------------------
+#################################################################################
 
 # ver estructura general del datase (variables, tipos de datos, primeros registros)
 glimpse(df1)
@@ -90,9 +89,9 @@ summary(df1)
   # variables categóricas <chr>: frecuencia de cada categoría
 
 
-#-------------------------------------------------------------------------------
+################################################################################
 # 1.2 VISUALIZACIÓN DISTRIBUCIONES
-# ------------------------------------------------------------------------------
+################################################################################
 
 # primero vamos a separar las variables numéricas y categóricas
 vars_num <- df1 %>%
@@ -202,220 +201,29 @@ ggplot(vars_cat_gg, aes(x = valor, fill = variable)) +
 
 
 
-#################################################################################
-#################################################################################
-# 2. PREPROCESAMIENTO DE DATOS
-#################################################################################
-#################################################################################
-
-df2 <- df1  # copiar dataset (en df1 se eliminó la variable Id)
-
-#################################################################################
-# 2.0 DIVIDIR LOS DATOS EN TRAIN/VALIDATION/TEST 
-  # para evitar filtraciones de información durante el preprocesamiento
-#################################################################################
-
-# Primero hay que separar variable objetivo y predictoras
-# variable objetivo
-y <- df2$SalePrice
-
-# variables predictoras
-X <- df2 %>%
-  select(-SalePrice)  # eliminar columna objetivo
-
-# Establecemos la semilla para reproducibilidad
-set.seed(42)
-
-# Separamos 60% para entrenamiento
-trainIndex <- createDataPartition(y, p = 0.6, list = FALSE)
-                # createDataPartition mantiene la distribución de la variable objetivo
-X_train <- X[trainIndex, ]
-y_train <- y[trainIndex]
-
-# Del 40% restante, dividimos en 50%-50% (validación y test)
-remainingIndex <- setdiff(seq_len(nrow(df2)), trainIndex)
-valIndex <- createDataPartition(y[remainingIndex], p = 0.5, list = FALSE)
-
-X_val <- X[remainingIndex[valIndex], ]
-y_val <- y[remainingIndex[valIndex]]
-
-X_test <- X[remainingIndex[-valIndex], ]
-y_test <- y[remainingIndex[-valIndex]]
-
-cat("Tamaños de conjuntos:\n")
-cat("  - Entrenamiento:", nrow(X_train), "observaciones\n")
-cat("  - Validación:", nrow(X_val), "observaciones\n")
-cat("  - Test:", nrow(X_test), "observaciones\n\n")
-
-# A PARTIR DE ESTE MOMENTO TODAS LAS TRAANSFORMACIONES DE LOS DATOS SE REALIZARÁN SOBRE EL CONJUNTO DE ENTRENAMIENTO
-# Y POSTERIORMENTE SE REPLICARÁN EN LOS SUBCONJUNTOS DE VALIDACIÓN Y TEST
-# ¡¡ MUY IMPORTANTE RESPETAR ESTO PARA EVIR DATA LEAKAGE!!
-
-#hagamos una copia de seguridad de los datos originales de test
-# (naming convention: añadir _num correspondiente a la sección del proceso en la que se encuentra)
-X_train_2 <- X_train
-X_val_2 <- X_val
-X_test_2 <- X_test
 
 
-#################################################################################
-# 2.1 GESTIÓN DE NULOS
-#################################################################################
+################################################################################
+# 1.3 ANÁLISIS DE CORRELACIÓN
+################################################################################
+# vamos ahora a estudiar la correlación entre variables numéricas, 
+# para poder hacer un análisis de correlación clásico es necesario que las variables sean numéricas
 
-# antes de nada comprobemos que no hay datos duplicados
-sum(duplicated(X_train_2))  
-  # es 0
-
-
-#------------------------------------------------
-# ver si hay vación o nulos (NULL) en los datos 
-# (los NA los trataremos aparte porque hay variables <chr> que lo toman como categoría)
-#------------------------------------------------
-
-sum(sapply(X_train_2, is.null))  
-  # es 0
-
-# comprobamos si hay datos vacíos ("" o " ")
-sum(sapply(X_train_2, function(x) sum(x == "" | x == " " , na.rm = TRUE)))
-                                                          # ignorar NAs para esta comprobación
-  # es 0
-
-
-#------------------------------------------------
-# NAs
-#------------------------------------------------
-
-# crear dataframe de nulos por variable
-nulos_X_train <- as.data.frame(colSums(is.na(X_train_2)))
-colnames(nulos_X_train) <- c("num_nulos")
-
-nulos_X_train <- nulos_X_train %>%
-  # seleccionar las variables que tienen nulos
-  filter(num_nulos > 0) %>%
-  # convertir los nombres de las filas en una columna
-  tibble::rownames_to_column(var = "variable") %>%
-  mutate(
-    # añadir columna del porcentaje de nulos
-    porcentaje_nulos = round((num_nulos / nrow(X_train_2)) * 100, 2),
-    # añadir columna del tipo de variable
-    tipo_variable = sapply(variable, function(v) class(X_train_2[[v]]))
-  ) %>%
-  # ordenar de mayor a menor número de nulos
-  arrange(desc(tipo_variable), desc(porcentaje_nulos))
-
-print(nulos_X_train)
-
-# OJO QUE HAY VARIABLES CATEGÓRICAS QUE CONTEMPLAN "NA" COMO CATEGORÍA
-  # Alley, FireplaceQu, PoolQC, Fence, MiscFeature
-  # BsmtQual, BsmtCond, BsmtExposure, BsmtFinType1, BsmtFinType2
-  # GarageType, GarageFinish, GarageQual, GarageCond
-
-# CONSECUENCIAS:
-#   * Las variables numéricas son tratables, mediante técnicas de imputación de datos
-#   * Sin embargo, (casi todas) las variables categóricas contemplan el `NA` como categoría (ej: `PoolQC=NA` cuando no hay piscina), por lo que su tratamiento se solucionaría si sustituimos estos valores vacíos por la categoría ``No`` (no aplica)
-#   * Las únicas variables que no contemplan `NA` como categoría son ``MasVnrType`` y ``Electrical``, esas habrá que tratarlas  ocn imputación también.
-
-
-# NAs variables categóricas "no aplica"
-#------------------------------------------------
-# para estas variables categóricas, sustituimos los NA por "No"
-vars_cat_na_no <- c("Alley", "FireplaceQu", "PoolQC", "Fence", "MiscFeature",
-                    "BsmtQual", "BsmtCond", "BsmtExposure", "BsmtFinType1", "BsmtFinType2",
-                    "GarageType", "GarageFinish", "GarageQual", "GarageCond")
-
-X_train_2 <- X_train_2 %>%
-  mutate(across(all_of(vars_cat_na_no), ~replace_na(.x, "No")))
-
-# comprobamos que ya no hay NAs en esas variables
-sapply(X_train_2[ , vars_cat_na_no], function(x) sum(is.na(x)))
-
-
-# NAs variables numéricas
-#------------------------------------------------
-
-# LotFrontage
-#-------------
-# ver el dataframe volumen de entradas para cada uno de los valores unicos de la variable LotFrontage
-LF_unique_freq <- as.data.frame(table(X_train_2$LotFrontage, useNA = "ifany"))
-colnames(LF_unique_freq) <- c("LotFrontage", "Frequency")
-LF_unique_freq <- LF_unique_freq %>%
-  arrange(desc(Frequency))
-print(LF_unique_freq)
-
-# Imputación simple en LotFrontage: mediana global + indicador
-# primero creamos la variable indicadora de NA
-X_train_2$LotFrontage_na <- is.na(X_train_2$LotFrontage)
-# luego calculamos la mediana
-med <- median(X_train_2$LotFrontage, na.rm = TRUE)
-# finalmente imputamos los NAs con la mediana
-X_train_2$LotFrontage[is.na(X_train_2$LotFrontage)] <- med
-
-# comprobamos que ya no hay NAs en LotFrontage
-sum(is.na(X_train_2$LotFrontage))
-
-# y eliminamos la variable indicadora por limpieza
-X_train_2 <- X_train_2 %>%
-  select(-LotFrontage_na)
-
-unique(X_train_2$LotFrontage_na)
-
-# veamos cuál es la media y la mediana para estas variables numéricas
-vars_num_na <- c("LotFrontage", "MasVnrArea", "GarageYrBlt")
-
-# estadísticas básicas de estas variables
-summary(X_train_2[ , vars_num_na])
-
-
-# MasVnrArea
-#-------------
-# si no hay revestimiento, el área es 0 por tanto imputamos 0 en los NAs
-X_train_2$MasVnrArea[is.na(X_train_2$MasVnrArea)] <- 0
-
-# comprobamos que ya no hay NAs en MasVnrArea
-sum(is.na(X_train_2$MasVnrArea))
-
-
-# GarageYrBlt
-#-------------
-# En `GarageYrBlt`: si no hay garaje cómo imputamos el año de construcción del garaje? (se podría imputar el año de construcción de la vivienda)
-# (esta variable posteriormente desaparecerá porque está muy fuertemente correlacionada con `YearBuilt`, entonces este problema desaparece)
-
-
-
-
-
-# ------------------------------------------------------------------------------
-# 2.2 CORRELACIÓN
-# ------------------------------------------------------------------------------
+# qué sería lo recomendable hacer con la variable objeetivo? eliminarla del análisis de correalación o dejarla?
+  # mejor eliminarla para no sesgar el análisis de correlación entre variables predictoras
 
 # calcular matriz de correlación para las variables numéricas
 vars_num_corr <- vars_num %>%
   select(-SalePrice)  # eliminar variable objetivo para este análisis
 
+
+#------------------------------------------------------------------------------------
+# MATRIZ DE CORRELACIÓN
+
 corr_matrix <- cor(vars_num_corr, use = "pairwise.complete.obs")  # usar solo pares completos
 
-# mostrar la matriz de correlación
+# mostrar la matriz de correlación completa
 print(round(corr_matrix, 2))
-
-# ahora mostrar solo los pares con alta correlación (>0.7 o <-0.7)
-high_corr <- which(abs(corr_matrix) > 0.7 & abs(corr_matrix) < 1, arr.ind = TRUE)
-high_corr_pairs <- data.frame(
-  Var1 = rownames(corr_matrix)[high_corr[, 1]],
-  Var2 = colnames(corr_matrix)[high_corr[, 2]],
-  Correlation = corr_matrix[high_corr]
-)
-high_corr_pairs <- high_corr_pairs %>%
-  # eliminar duplicados (Var1, Var2) y (Var2, Var1)
-  filter(Var1 < Var2) %>%
-  
-  # añadir columna con el tipo de var1 y otra con el tipo de var2
-  mutate(
-    Tipo_Var1 = sapply(Var1, function(v) class(X_train_2[[v]])),
-    Tipo_Var2 = sapply(Var2, function(v) class(X_train_2[[v]]))
-  ) %>%
-  arrange(-abs(Correlation))
-high_corr_pairs
-
 
 # visualizar la matriz de correlación con colores
 library(reshape2)
@@ -434,9 +242,346 @@ ggplot(data = melted_corr, aes(x = Var1, y = Var2, fill = value)) +
   labs(title = "Matriz de Correlación de Variables Numéricas")
 
 
-# ------------------------------------------------------------------------------
-# 2.2 CODIFICACIÓN VARIABLES CATEGÓRICAS
-# ------------------------------------------------------------------------------
+#------------------------------------------------------------------------------------
+# ANÁLISIS DE ALTAS CORRELACIONES
+#------------------------------------------------------------------------------------
+
+# ahora mostrar solo los pares con alta correlación
+high_corr <- which(abs(corr_matrix) > 0.5 & abs(corr_matrix) < 1, arr.ind = TRUE)
+high_corr_pairs <- data.frame(
+  Var1 = rownames(corr_matrix)[high_corr[, 1]],
+  Var2 = colnames(corr_matrix)[high_corr[, 2]],
+  Correlation = corr_matrix[high_corr]
+)
+high_corr_pairs <- high_corr_pairs %>%
+  # eliminar duplicados (Var1, Var2) y (Var2, Var1)
+  filter(Var1 < Var2) %>%
+  
+  # añadir columna con el tipo de var1 y otra con el tipo de var2
+  mutate(
+    Tipo_Var1 = sapply(Var1, function(v) class(X_train_2[[v]])),
+    Tipo_Var2 = sapply(Var2, function(v) class(X_train_2[[v]]))
+  ) %>%
+  arrange(-abs(Correlation))
+high_corr_pairs
+
+
+# Destacan los pares de variables con mucha correlación:
+# Var1  Var2  Correlation  Tipo_Var1  Tipo_Var2
+# GarageArea	GarageCars	0.8824754	integer	integer
+# GarageYrBlt	YearBuilt	0.8256675	integer	integer
+# GrLivArea	TotRmsAbvGrd	0.8254894	integer	integer
+# TotalBsmtSF	X1stFlrSF	0.8195300	integer	integer
+
+#  * La variable `GarageYrBlt` (año de construcción del garaje) está muy correlacionada con `YearBuilt` (año de construcción de la vivienda), lo que tiene sentido en la mayoría de los casos coincidirá con la contrucción del edificio, por lo que es probable que haya que eliminar una de las dos.
+ 
+#  * La variable `TotalBsmtSF` (superficie total del sótano) está muy correlacionada con `X1stFlrSF` (superficie de la planta baja) y `GrLivArea` (superficie habitable sobre el suelo), lo que tiene sentido ya que ambas superficies contribuyen al área habitable total de la vivienda.
+ 
+#  * La variable `GarageArea` (área del garaje) está muy correlacionada con `GarageCars` (número de coches que caben en el garaje), tendremos que ver con qué variable tiene más sentido quedarse.
+ 
+#  * La variable `TotRmsAbvGrd` (número total de habitaciones sobre el suelo) está muy correlacionada con `GrLivArea` (superficie habitable sobre el suelo), lo que tiene sentido ya que más habitaciones suelen implicar una mayor superficie habitable.
+
+# el resto son:
+# rLivArea	X2ndFlrSF	0.6875011	integer	integer
+# BedroomAbvGr	TotRmsAbvGrd	0.6766199	integer	integer
+# BsmtFinSF1	BsmtFullBath	0.6492118	integer	integer
+# GarageYrBlt	YearRemodAdd	0.6422768	integer	integer
+# FullBath	GrLivArea	0.6300116	integer	integer
+# TotRmsAbvGrd	X2ndFlrSF	0.6164226	integer	integer
+
+# qué tendría más sentido en el feature engineering (hablando de las variables en los pares muy correlacionados), si a nivel de signifcado son lo mismo, qué es mejor quedarse ocn variables continuas o discretaas?
+
+
+
+
+#################################################################################
+# 1.4 ANÁLISIS DE OUTLIERS
+#################################################################################
+
+#...
+
+
+
+
+
+
+
+
+
+
+
+
+#################################################################################
+# 1.5 ANÁLISIS DE VALORES CORRUPTOS (duplicados, nulos, faltantes...)
+#################################################################################
+
+#----------------------------------------------------------------------------------
+# DATOS DUPLICADOS
+#----------------------------------------------------------------------------------
+
+cat( "Número de entradas duplicadas:", sum(duplicated(train_data)) )
+
+#----------------------------------------------------------------------------------
+# DATOS NULL O VACÍOS
+#----------------------------------------------------------------------------------
+
+cat( "Número de NULL:", sum(sapply(train_data, is.null)) )
+
+cat("\nNúmero de vacíos:",sum(sapply(train_data, function(x) sum(x == "" | x == " " , na.rm = TRUE)))  )
+
+
+#################################################################################
+# NAs
+#################################################################################
+# VEAMOS QUÉ VARIABLES TIENEN NAs Y CÓMO TRATARLOS
+
+# crear dataframe de nulos por variable
+nulos_train <- as.data.frame(colSums(is.na(train_data)))
+colnames(nulos_train) <- c("num_nulos")
+
+nulos_train <- nulos_train %>%
+  # seleccionar las variables que tienen nulos
+  filter(num_nulos > 0) %>%
+  # convertir los nombres de las filas en una columna
+  tibble::rownames_to_column(var = "variable") %>%
+  mutate(
+    # añadir columna del porcentaje de nulos
+    porcentaje_nulos = round((num_nulos / nrow(train_data)) * 100, 2),
+    # añadir columna del tipo de variable
+    tipo_variable = sapply(variable, function(v) class(train_data[[v]]))
+  ) %>%
+  # ordenar de mayor a menor número de nulos
+  arrange(desc(tipo_variable), desc(porcentaje_nulos))
+
+print(nulos_train)
+
+# OJO QUE HAY VARIABLES CATEGÓRICAS QUE CONTEMPLAN "NA" COMO CATEGORÍA
+  # Alley, FireplaceQu, PoolQC, Fence, MiscFeature
+  # BsmtQual, BsmtCond, BsmtExposure, BsmtFinType1, BsmtFinType2
+  # GarageType, GarageFinish, GarageQual, GarageCond
+
+
+
+# Entre las variables categóricas encontramos dos casuísticas de valores nulos:
+  
+#   * Tras estudiar las variables categóricas, obervamos que casi todas contemplan el valor `NA` como categoría (ej: `PoolQC=NA` cuando no hay piscina), esto puede dar problemas, por lo que sustituiremos estos valores por la categoría `None` (no aplica)
+  
+#   * Por otro lado lado ``MasVnrType`` y `Electrical`, son las dos únicas variables categóricas con nulos que no  contemplan `NA` como categoría, esto es, los valores nulos son valores faltantes que trataremos con imputación (al tratarse de variables categóricas, imputaremos la moda).
+
+
+
+# Por su parte, entre las variable numéricas también observamos distintos casos:
+
+#   * `LotFrontage` (la longitud de la fachada del lote): aquí, los valores nulos pueden indicar que no se midió o registró esta información. Podemos imputar estos valores con la mediana de la variable.
+    
+#   * `MasVnrArea` (área del revestimiento): cuando ``MasVnrType=None`` (ningún tipo de revestimiento aplicado) la variable `MasVnrArea` tiene valores faltantes, lo que tiene sentido ya que si no hay revestimiento, no hay área de revestimiento, por lo que para tratarlos les imputaremos área `=0`.
+
+#   * `GarageYrBlt` (año de construcción del garaje): los valores nulos en esta variable coinciden con los de la variable `GarageType=NA` (no hay garaje). Como ya vimos anteriormente, esta variable está muy correlacionada con `YearBuilt`, por lo que podríamos eliminarla directamente más adelante. Si quisiéramos imputar estos valores, podríamos usar el año de construcción de la vivienda (`YearBuilt`) como referencia, pero dado que esta variable desaparecerá en el feature engineering, no es necesario hacer esta imputación ahora.
+
+
+
+
+
+
+
+
+
+
+#################################################################################
+#################################################################################
+# 2. DIVISIÓN CONJUNTOS DATOS: TRAIN / VALIDATION / TEST
+#################################################################################
+#################################################################################
+
+df2 <- df1  # (en df1 se eliminó la variable Id)
+
+# Desde este momento vamos a usar pipelines y workflows de tidymodels para el preprocesamiento, ya que esto nos va a permitir aplicar transformaciones en el conjunto de entrenamiento y posteriormente replicarlas de forma simple en los conjuntos de validación y test sin riesgo de data leakage.
+
+
+set.seed(42)
+
+# Separar 60% para train
+initial_split  <- rsample::initial_split(df2, prop = 0.6)
+train_data     <- rsample::training(initial_split)
+temp_data      <- rsample::testing(initial_split)
+
+# del 40% restante, separar 50%-50% para validation y test
+validation_split <- rsample::initial_split(temp_data, prop = 0.5)
+validation_data  <- rsample::training(validation_split)
+test_data        <- rsample::testing(validation_split)
+
+
+cat("Tamaños de conjuntos:\n")
+cat("  - Entrenamiento:", nrow(train_data), "observaciones\n")
+cat("  - Validación:", nrow(validation_data), "observaciones\n")
+cat("  - Test:", nrow(test_data), "observaciones\n\n")
+
+
+
+# A PARTIR DE ESTE MOMENTO TODAS LAS TRANSFORMACIONES DE LOS DATOS SE REALIZARÁN SOBRE EL CONJUNTO DE ENTRENAMIENTO
+# Y POSTERIORMENTE SE REPLICARÁN EN LOS SUBCONJUNTOS DE VALIDACIÓN Y TEST
+# ¡¡ MUY IMPORTANTE RESPETAR ESTO PARA EVIR DATA LEAKAGE!!
+
+
+
+#################################################################################
+#################################################################################
+# 3. PREPROCESAMIENTO DE DATOS
+#################################################################################
+#################################################################################
+
+# cada tipo de variable va a requerir un tratamiento diferente (usando solo el conjunto de datos de train), por lo que, antes de nada, vamos a separar las variables en los distintos tipos
+
+
+
+
+# variables categóricas
+vars_cat <- train_data %>%
+  select(where(is.character))
+
+
+
+# variables numéricas
+vars_num <- data %>% select(where(is.numeric)) %>% names()
+
+# umbral (ajusta si quieres)
+umbral <- 100
+
+# contar valores únicos (ignorando NA)
+unique_counts <- sapply(data[num_vars], function(x) length(unique(na.omit(x))))
+
+# listas resultantes
+vars_num_cont <- names(unique_counts[unique_counts > umbral])
+vars_num_disc <- names(unique_counts[unique_counts <= umbral])
+
+# variables categóricas (character o factor)
+vars_cat <- data %>% select(where(~ is.character(.) || is.factor(.))) %>% names()
+
+# mostrar resultados breves
+cat("Num contínuas:", length(vars_num_cont), "\n")
+cat("Num discretas:", length(vars_num_disc), "\n")
+cat("Categoricas:", length(vars_cat), "\n")
+
+
+
+
+#################################################################################
+# 3.1 PROCESAMIENTO DE VARIABLES CATEGÓRICAS
+#################################################################################
+
+
+#-------------------------------------------------------------------------------
+# TRATAMIENTO DE VALORES NULOS EN VARIABLES CATEGÓRICAS
+#-------------------------------------------------------------------------------
+
+#----------------------------------------
+# empecemos con las variables categóricas que contemplan NA como categoría, y vamos a recategorizar esos NAs como "None"
+
+vars_cat_na_no <- c("Alley", "FireplaceQu", "PoolQC", "Fence", "MiscFeature",
+                    "BsmtQual", "BsmtCond", "BsmtExposure", "BsmtFinType1", "BsmtFinType2",
+                    "GarageType", "GarageFinish", "GarageQual", "GarageCond")
+
+# sustituimos los NAs por "None"
+train_data <- train_data %>%
+  mutate(across(all_of(vars_cat_na_no), ~replace_na(.x, "None")))
+
+# comprobamos que ya no hay NAs en esas variables
+sapply(train_data[ , vars_cat_na_no], function(x) sum(is.na(x)))
+
+
+#----------------------------------------
+# ahora tratemos las variables categóricas con NAs que no contemplan NA como categoría: MasVnrType y Electrical, que les imputaremos la moda respectivamente
+
+vars_cat_na_yes <- c("MasVnrType", "Electrical")
+
+# comprobamos el número de NAs en esas variables
+sapply(train_data[ , vars_cat_na_yes], function(x) sum(is.na(x)))
+
+# función para calcular la moda
+moda_func <- function(x) {
+  # cogemos la tabla de frecuencias y devolvemos el nombre de la categoría más frecuente
+  names(sort(table(x), decreasing = TRUE))[1]
+}
+
+# ahora imputamos los NAs con la moda
+train_data <- train_data %>%
+  mutate(across(all_of(vars_cat_na_yes), ~replace_na(.x, moda_func(.x))))
+
+# comprobamos que ya no hay NAs en esas variables
+sapply(train_data[ , vars_cat_na_yes], function(x) sum(is.na(x)))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#################################################################################
+# 3.1 PROCESAMIENTO DE VARIABLES NUMÉRICAS
+#################################################################################
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
